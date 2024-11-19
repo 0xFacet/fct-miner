@@ -1,7 +1,7 @@
 const readline = require("readline");
-const { walletL1FacetActions } = require("@0xfacet/sdk/viem");
+const { walletL1FacetActions, createFacetPublicClient } = require("@0xfacet/sdk/viem");
 const { privateKeyToAccount } = require("viem/accounts");
-const { createWalletClient, http, formatEther } = require("viem"); // Added formatEther import
+const { createWalletClient, http, formatEther, zeroAddress, maxUint256 } = require("viem"); // Added formatEther import
 const { sepolia } = require("viem/chains");
 require("dotenv").config();
 
@@ -106,6 +106,11 @@ function promptUser() {
       }
 
       const account = privateKeyToAccount(PRIVATE_KEY);
+      const facetPublicClient = createFacetPublicClient(sepolia.id);
+      console.log("Account:", account.address);
+      const fctBalance = await facetPublicClient.getBalance({ address: account.address });
+      console.log("FCT Balance:", fctBalance);
+      
       const walletClient = createWalletClient({
         chain: sepolia,
         account: account,
