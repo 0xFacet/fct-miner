@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { Command } from "commander";
 import {
   createWalletClient,
   createPublicClient,
@@ -24,9 +25,33 @@ import { compareMiningVsSwapping, getSwapQuote } from "./facet-swapper";
 import { getNetworkConfig, getCurrentNetwork, isMainnet } from "./config";
 import ui from "./enhanced-ui";
 import { MiningDashboard } from "./mining-dashboard";
+import { MiningDatabase } from "./mining-database-json";
+import { AnalyticsEngine } from "./analytics-engine";
+import { calculateFctOutput } from "./fct-calculator";
+import {
+  buildRulesFromConfig,
+  evaluateRules,
+  collectRuntimeContext,
+  getEthPriceUsd,
+  MiningStrategy,
+  MiningConfig,
+  type RuntimeContext,
+} from "./mining-rules";
 import chalk from "chalk";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 dotenv.config();
+
+// Get version from package.json
+function getVersion(): string {
+  const packageJson = JSON.parse(
+    readFileSync(join(__dirname, "package.json"), "utf8")
+  );
+  return packageJson.version;
+}
+
+const VERSION = getVersion();
 
 // Get network configuration
 const networkConfig = getNetworkConfig();
@@ -45,6 +70,71 @@ function prompt(question: string): Promise<string> {
     });
   });
 }
+
+// Parse hours argument (e.g., "2-6,14-18" -> [2,3,4,5,6,14,15,16,17,18])
+function parseHours(hoursStr: string): number[] {
+  const hours: number[] = [];
+  const parts = hoursStr.split(",");
+
+  for (const part of parts) {
+    if (part.includes("-")) {
+      const [start, end] = part.split("-").map((h) => parseInt(h.trim()));
+      for (let h = start; h <= end; h++) {
+        if (h >= 0 && h <= 23) hours.push(h);
+      }
+    } else {
+      const h = parseInt(part.trim());
+      if (h >= 0 && h <= 23) hours.push(h);
+    }
+  }
+
+  return [...new Set(hours)].sort((a, b) => a - b);
+}
+
+// Command line interface setup
+const program = new Command();
+
+program
+  .name("facet-miner")
+  .description("FCT Miner with interactive and advanced mining features")
+  .version(VERSION)
+  .option("-s, --strategy <type>", "Mining strategy (auto|arbitrage)", "auto")
+  .option("-c, --max-cost-usd <usd>", "Maximum cost per FCT in USD", parseFloat)
+  .option(
+    "-e, --min-efficiency <percent>",
+    "Minimum mining efficiency percentage",
+    parseFloat
+  )
+  .option(
+    "-H, --hours <range>",
+    "Hours to mine (e.g., '2-6,14-18')",
+    parseHours
+  )
+  .option("-b, --budget <eth>", "Daily budget in ETH", parseFloat)
+  .option("-t, --target <fct>", "Target FCT amount to mine", parseFloat)
+  .option(
+    "-i, --interval <seconds>",
+    "Check interval in seconds (enables smart polling mode)",
+    (v) => parseInt(v) * 1000
+  )
+  .option("-m, --max-size <kb>", "Maximum data size in KB", parseInt)
+  .option("--analyze", "Show analytics after completion")
+  .option("--profiles", "Show mining profile examples")
+  .action(async (options) => {
+    // Handle special commands first
+    if (options.profiles) {
+      showProfiles();
+      return;
+    }
+
+    if (options.analyze) {
+      await showAnalytics();
+      return;
+    }
+
+    // Always use interactive mining with enhanced dashboard
+    await startInteractiveMining(options);
+  });
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) {
@@ -76,6 +166,113 @@ const walletClient = createWalletClient({
   transport: http(networkConfig.l1RpcUrl),
 });
 
+// Show profiles function
+function showProfiles() {
+  console.log(chalk.cyan.bold("\n>> Mining Profile Examples\n"));
+
+  console.log(chalk.yellow("Basic (Smart mode):"));
+  console.log(chalk.gray("  pnpm mine --max-cost-usd 0.0005 --budget 0.01"));
+  console.log("");
+
+  console.log(chalk.yellow("Conservative:"));
+  console.log(chalk.gray("  pnpm mine --max-cost-usd 0.0003 --budget 0.005"));
+  console.log("");
+
+  console.log(chalk.yellow("Night Mining (Scheduled):"));
+  console.log(chalk.gray("  pnpm mine --hours 2-6 --budget 0.02"));
+  console.log("");
+
+  console.log(chalk.yellow("Arbitrage Only (Smart):"));
+  console.log(chalk.gray("  pnpm mine --strategy arbitrage --interval 10"));
+  console.log("");
+
+  console.log(chalk.yellow("Target Amount:"));
+  console.log(chalk.gray("  pnpm mine --target 50000 --max-cost-usd 0.0004"));
+  console.log("");
+
+  console.log(chalk.yellow("Interactive with Budget Override:"));
+  console.log(
+    chalk.gray("  pnpm mine --budget 0.01  # Skips spending cap prompt")
+  );
+  console.log("");
+
+  console.log(chalk.yellow("Interactive with Size Override:"));
+  console.log(
+    chalk.gray("  pnpm mine --max-size 50  # Skips size selection prompt")
+  );
+}
+
+// Show analytics function
+async function showAnalytics() {
+  try {
+    const db = new MiningDatabase();
+    console.log(chalk.cyan.bold("\n📊 Mining Analytics\n"));
+
+    const stats = db.getAllTimeStats();
+    if (!stats) {
+      console.log(chalk.yellow("No mining data found"));
+      db.close();
+      return;
+    }
+
+    // Display stats
+    console.log(chalk.cyan("Performance Summary:"));
+    console.log(chalk.white(`  Total transactions: ${stats.txCount}`));
+    console.log(
+      chalk.white(`  Total FCT mined: ${stats.totalFctFct.toFixed(2)}`)
+    );
+    console.log(
+      chalk.white(`  Total ETH spent: ${stats.totalEthEth.toFixed(4)}`)
+    );
+    console.log(
+      chalk.white(`  Average efficiency: ${stats.avgEfficiency.toFixed(1)}%`)
+    );
+    console.log(
+      chalk.white(
+        `  Average cost/FCT: $${(stats.avgCostPerFct * 3500).toFixed(5)}`
+      )
+    );
+
+    // Best hours
+    const bestHours = db.getBestHours(3);
+    if (bestHours.length > 0) {
+      console.log(chalk.cyan("\nBest Mining Hours:"));
+      bestHours.forEach((h, i) => {
+        console.log(
+          chalk.white(
+            `  ${i + 1}. Hour ${h.hour}:00 - ${(h.avgFctPerEth * 1000).toFixed(
+              2
+            )} FCT/ETH (${h.txCount} txs)`
+          )
+        );
+      });
+    }
+
+    // Recent transactions
+    const recent = db.getRecentTransactions(10);
+    if (recent.length > 0) {
+      console.log(chalk.cyan(`\nLast ${recent.length} Transactions:`));
+      recent.forEach((tx) => {
+        const time = new Date(tx.timestamp).toLocaleString();
+        console.log(
+          chalk.gray(
+            `  ${time}: ${tx.fctMintedFct.toFixed(
+              4
+            )} FCT for ${tx.ethBurnedEth.toFixed(
+              6
+            )} ETH (${tx.efficiency.toFixed(1)}%)`
+          )
+        );
+      });
+    }
+
+    db.close();
+  } catch (error) {
+    console.error(chalk.red("Failed to analyze:"), error);
+    process.exit(1);
+  }
+}
+
 // Uniswap V2 pairs (mainnet only for FCT trading)
 const FCT_WETH_PAIR = networkConfig.fctWethPair;
 
@@ -92,7 +289,7 @@ async function getEthPriceInUsd(): Promise<number> {
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const data = await response.json();
+    const data = await response.json() as { priceInUSD: string };
     const price = parseFloat(data.priceInUSD);
 
     if (isNaN(price) || price <= 0) {
@@ -138,14 +335,20 @@ async function getFctMarketPrice(): Promise<{
       functionName: "getReserves",
     });
 
-    // Token0 is WETH (0x1673540243E793B0e77C038D4a88448efF524DcE)
-    // Token1 is wrapped FCT (0x4200000000000000000000000000000000000006)
-    // Based on the debug output, we know:
-    // Reserve0 = WETH reserve (small amount)
-    // Reserve1 = FCT reserve (large amount)
+    // Determine token order dynamically
+    const WETH = "0x1673540243E793B0e77C038D4a88448efF524DcE";
+    let wethReserve: bigint, fctReserve: bigint;
 
-    const wethReserve = reserve0; // WETH is token0
-    const fctReserve = reserve1; // FCT is token1
+    if ((token0 as string).toLowerCase() === WETH.toLowerCase()) {
+      wethReserve = reserve0;
+      fctReserve = reserve1;
+    } else if ((token1 as string).toLowerCase() === WETH.toLowerCase()) {
+      wethReserve = reserve1;
+      fctReserve = reserve0;
+    } else {
+      console.log("WETH not found in pair");
+      return null;
+    }
 
     if (fctReserve === 0n || wethReserve === 0n) {
       return null;
@@ -306,17 +509,33 @@ async function selectMiningSize(
 async function miningLoop(
   spendCap: bigint,
   ethPriceUsd: number,
-  dataSize: number
+  dataSize: number,
+  db: MiningDatabase,
+  analytics: AnalyticsEngine,
+  miningConfig: MiningConfig
 ) {
   const balance = await publicClient.getBalance({ address: account.address });
 
-  // Initialize dashboard
-  const dashboard = new MiningDashboard({
-    sessionTarget: spendCap,
-    currentBalance: balance,
-    ethPrice: ethPriceUsd,
-    remainingBudget: spendCap,
-  });
+  // Create a new mining session in the database
+  const sessionId = db.createSession("enhanced");
+
+  console.log(
+    chalk.cyan(`>> Starting Enhanced Mining Session #${sessionId}\n`)
+  );
+
+  // Build rules for evaluation from mining config
+  const rules = buildRulesFromConfig(miningConfig);
+
+  // Initialize dashboard with mining config
+  const dashboard = new MiningDashboard(
+    {
+      sessionTarget: spendCap,
+      currentBalance: balance,
+      ethPrice: ethPriceUsd,
+      remainingBudget: spendCap,
+    },
+    miningConfig
+  );
 
   dashboard.start();
 
@@ -327,6 +546,41 @@ async function miningLoop(
   try {
     while (totalSpent < spendCap) {
       transactionCount++;
+
+      // Rule evaluation for mining features (if any rules are configured)
+      if (rules.length > 0) {
+        // Get current network conditions
+        const currentGasPrice = await publicClient.getGasPrice();
+        const currentBlock = await publicClient.getBlock();
+        const currentBaseFee = currentBlock.baseFeePerGas || 0n;
+        let currentMintRate = 0n;
+        try {
+          currentMintRate = await getFctMintRate(networkConfig.l1Chain.id);
+        } catch (error) {
+          // Use default mint rate if getFctMintRate fails (e.g., on testnets)
+          currentMintRate = 0n;
+        }
+
+        // Collect runtime context for rule evaluation
+        const runtimeContext = await collectRuntimeContext(
+          totalSpent,
+          totalFctMinted,
+          currentGasPrice,
+          currentBaseFee,
+          currentMintRate,
+          ethPriceUsd
+        );
+
+        // Evaluate all rules
+        const shouldContinue = await evaluateRules(rules, runtimeContext);
+
+        if (!shouldContinue) {
+          console.log(
+            chalk.yellow(">> Mining rules indicate stopping conditions met")
+          );
+          break;
+        }
+      }
 
       // Estimate transaction cost
       const estimatedCost = await estimateTransactionCost(
@@ -357,6 +611,21 @@ async function miningLoop(
           totalSpent += result.ethSpent;
           totalFctMinted += result.fctMinted;
 
+          // Save transaction to database
+          const miningResult = {
+            l1Hash: result.l1Hash,
+            facetHash: result.facetHash,
+            ethBurned: result.ethSpent,
+            fctMinted: result.fctMinted,
+            efficiency: result.efficiency,
+            costPerFct: result.costPerFct,
+            gasUsed: result.gasUsed,
+            effectiveGasPrice: result.effectiveGasPrice,
+            baseFeePerGas: result.baseFeePerGas,
+          };
+
+          db.saveTransaction(miningResult, sessionId);
+
           // Update dashboard with completed transaction
           dashboard.completeTransaction(result.ethSpent, result.fctMinted);
 
@@ -376,11 +645,18 @@ async function miningLoop(
     }
   } finally {
     dashboard.stop();
-    await showFinalSummary(
+
+    // End the session in database
+    db.endSession(sessionId);
+
+    await showFinalSummaryWithAnalytics(
       totalSpent,
       totalFctMinted,
       ethPriceUsd,
-      transactionCount
+      transactionCount,
+      sessionId,
+      db,
+      analytics
     );
   }
 }
@@ -417,6 +693,10 @@ async function mineFacetTransactionWithDashboard(
   ethSpent: bigint;
   fctMinted: bigint;
   costPerFct: bigint;
+  efficiency: number;
+  gasUsed: bigint;
+  effectiveGasPrice: bigint;
+  baseFeePerGas: bigint;
 } | null> {
   const actualDataSize = dataSize || 100 * 1024;
   const overheadBytes = 160;
@@ -428,6 +708,10 @@ async function mineFacetTransactionWithDashboard(
   const boostedGasPrice = BigInt(
     Math.floor(Number(currentGasPrice) * gasPriceMultiplier)
   );
+
+  // Get current block for baseFee
+  const currentBlock = await publicClient.getBlock();
+  const baseFee = currentBlock.baseFeePerGas || currentGasPrice;
 
   dashboard.updateTransaction({ status: "submitting" });
 
@@ -453,6 +737,8 @@ async function mineFacetTransactionWithDashboard(
             account,
             gasPrice: boostedGasPrice,
             nonce: l1Nonce,
+            kzg: undefined,
+            chain: undefined,
           });
         }
       );
@@ -462,7 +748,13 @@ async function mineFacetTransactionWithDashboard(
       hash: facetTransactionHash,
     });
 
-    // Wait for confirmation with timeout
+    // Wait for L1 confirmation to get actual gas data
+    const l1Receipt = await publicClient.waitForTransactionReceipt({
+      hash: l1TransactionHash as `0x${string}`,
+      timeout: 60_000,
+    });
+
+    // Wait for Facet confirmation
     const facetReceipt = await facetClient.waitForTransactionReceipt({
       hash: facetTransactionHash as `0x${string}`,
       timeout: 60_000,
@@ -477,10 +769,17 @@ async function mineFacetTransactionWithDashboard(
       actualFctMinted = BigInt(facetTx.mint as string | number | bigint);
     }
 
-    const actualEthBurned = await estimateTransactionCost(
-      dataSize,
-      ethPriceUsd
-    );
+    // Get actual gas usage and cost
+    const actualGasUsed = l1Receipt.gasUsed || 0n;
+    const actualEffectiveGasPrice =
+      l1Receipt.effectiveGasPrice || boostedGasPrice;
+    const actualEthBurned = actualEffectiveGasPrice * actualGasUsed;
+
+    // Calculate efficiency using the new calculator
+    const baseExecutionGas = 21000n;
+    const calldataGas = actualGasUsed - baseExecutionGas;
+    const efficiency = (Number(calldataGas) / Number(actualGasUsed)) * 100;
+
     const actualEthPerFct =
       actualFctMinted > 0n
         ? (actualEthBurned * 10n ** 18n) / actualFctMinted
@@ -497,6 +796,10 @@ async function mineFacetTransactionWithDashboard(
       ethSpent: actualEthBurned,
       fctMinted: actualFctMinted,
       costPerFct: actualEthPerFct,
+      efficiency,
+      gasUsed: actualGasUsed,
+      effectiveGasPrice: actualEffectiveGasPrice,
+      baseFeePerGas: baseFee,
     };
   } catch (error) {
     dashboard.updateTransaction({ status: "failed" });
@@ -544,6 +847,7 @@ async function mineFacetTransaction(
   const baseExecutionGas = 21000n;
   const estimatedInputCostGas =
     calculateInputGasCost(mineBoostData) + baseExecutionGas;
+  // Use baseFee (not gasPrice) for FCT calculation
   const inputCostWei = (estimatedInputCostGas - baseExecutionGas) * baseFee;
   const fctMintAmount = inputCostWei * fctMintRate;
 
@@ -710,6 +1014,8 @@ async function mineFacetTransaction(
             account,
             gasPrice: boostedGasPrice,
             nonce: l1Nonce,
+            kzg: undefined,
+            chain: undefined,
           });
         }
       );
@@ -725,6 +1031,21 @@ async function mineFacetTransaction(
     let actualGasUsed = estimatedInputCostGas; // Fallback to estimate
     let actualGasPrice = boostedGasPrice; // Use the gas price we set
     let isConfirmed = false;
+
+    // Get L1 receipt for actual gas used
+    try {
+      const l1Receipt = await publicClient.waitForTransactionReceipt({
+        hash: l1TransactionHash as `0x${string}`,
+        timeout: 60_000,
+      });
+      actualEthBurned =
+        (l1Receipt.effectiveGasPrice ?? boostedGasPrice) *
+        (l1Receipt.gasUsed ?? 0n);
+      actualGasUsed = l1Receipt.gasUsed ?? estimatedInputCostGas;
+      actualGasPrice = l1Receipt.effectiveGasPrice ?? boostedGasPrice;
+    } catch (l1Error) {
+      console.log("Warning: Could not get L1 receipt, using estimates");
+    }
 
     try {
       const facetReceipt = await facetClient.waitForTransactionReceipt({
@@ -822,17 +1143,20 @@ async function mineFacetTransaction(
   }
 }
 
-async function showFinalSummary(
+async function showFinalSummaryWithAnalytics(
   totalSpent: bigint,
   totalFctMinted: bigint,
   ethPriceUsd: number,
-  transactionCount: number
+  transactionCount: number,
+  sessionId: number,
+  db: MiningDatabase,
+  analytics: AnalyticsEngine
 ) {
   console.clear();
 
   // Keep the same header as always
   const borderWidth = 79;
-  const text = "FCT MINER v1.0";
+  const text = `FCT MINER v${VERSION}`;
   const padding = Math.floor((borderWidth - text.length) / 2);
   const remainder = borderWidth - text.length - padding;
   const centeredText = " ".repeat(padding) + text + " ".repeat(remainder);
@@ -887,16 +1211,136 @@ async function showFinalSummary(
     );
   }
 
-  console.log(chalk.green("\nSession completed successfully!"));
-  console.log(chalk.gray("Press any key to exit..."));
+  // Add analytics insights
+  const sessionStats = db.getSessionStats(sessionId);
+  if (sessionStats) {
+    console.log(chalk.cyan("\n>> Session Analytics:"));
+    console.log(
+      chalk.white(
+        `  Mining efficiency: ${sessionStats.avgEfficiency.toFixed(1)}%`
+      )
+    );
+
+    // Get recent transactions for analysis
+    const recentTxs = db.getRecentTransactions(5);
+    if (recentTxs.length > 0) {
+      const bestTx = recentTxs.reduce((best, tx) =>
+        tx.ethBurnedEth / tx.fctMintedFct <
+        best.ethBurnedEth / best.fctMintedFct
+          ? tx
+          : best
+      );
+      console.log(
+        chalk.white(
+          `  Best transaction: ${bestTx.fctMintedFct.toFixed(
+            4
+          )} FCT for ${bestTx.ethBurnedEth.toFixed(6)} ETH`
+        )
+      );
+    }
+
+    // Show best mining hours from all-time data
+    const bestHours = db.getBestHours(3);
+    if (bestHours.length > 0) {
+      console.log(chalk.cyan("\n>> Mining Insights:"));
+      console.log(chalk.white("  Optimal mining hours based on your history:"));
+      bestHours.forEach((h, i) => {
+        console.log(
+          chalk.gray(
+            `    ${i + 1}. Hour ${h.hour}:00 - ${(
+              h.avgFctPerEth * 1000
+            ).toFixed(2)} FCT/ETH (${h.txCount} previous txs)`
+          )
+        );
+      });
+    }
+
+    // Show analytics command suggestion
+    console.log(chalk.cyan("\n>> View Detailed Analytics:"));
+    console.log(
+      chalk.gray(
+        `  Run: ${chalk.white(
+          "pnpm mine --analyze"
+        )} for comprehensive insights`
+      )
+    );
+    console.log(
+      chalk.gray(
+        `  Run: ${chalk.white(
+          `pnpm mine --analyze --session ${sessionId}`
+        )} for this session only`
+      )
+    );
+  }
+
+  console.log(
+    chalk.green("\n>> Interactive Mining Session completed successfully!")
+  );
+  console.log(
+    chalk.yellow(">> All data has been saved to ./mining-data/mining.json")
+  );
 }
 
-async function main() {
-  await startMiningSession();
-}
-
-async function startMiningSession() {
+async function startInteractiveMining(options: any) {
   ui.showHeader(getCurrentNetwork(), account.address);
+
+  // Create mining configuration from options (preserving all features)
+  const miningConfig: MiningConfig = {
+    strategy: (options.strategy as MiningStrategy) || MiningStrategy.AUTO,
+    maxCostPerFct: options.maxCostUsd,
+    minEfficiency: options.minEfficiency,
+    scheduleHours: options.hours,
+    dailyBudgetEth: options.budget,
+    targetFctAmount: options.target,
+    checkIntervalMs: options.interval || 30000,
+    maxDataSizeKb: options.maxSize || 100,
+  };
+
+  // Validate strategy if provided
+  if (options.strategy) {
+    const validStrategies = Object.values(MiningStrategy);
+    if (!validStrategies.includes(options.strategy as MiningStrategy)) {
+      console.error(chalk.red(`Invalid strategy: ${options.strategy}`));
+      console.error(
+        chalk.yellow(`Valid strategies: ${validStrategies.join(", ")}`)
+      );
+      process.exit(1);
+    }
+  }
+
+  // Initialize database and analytics
+  const db = new MiningDatabase();
+  const analytics = new AnalyticsEngine(db);
+
+  // Check if there's previous mining data
+  const allTimeStats = db.getAllTimeStats();
+  if (allTimeStats.txCount > 0) {
+    console.log(chalk.cyan(">> Previous Mining History Found:"));
+    console.log(chalk.white(`  Total transactions: ${allTimeStats.txCount}`));
+    console.log(
+      chalk.white(`  Total FCT mined: ${allTimeStats.totalFctFct.toFixed(2)}`)
+    );
+    console.log(
+      chalk.white(`  Total ETH spent: ${allTimeStats.totalEthEth.toFixed(4)}`)
+    );
+    console.log(
+      chalk.white(
+        `  Average cost/FCT: $${(allTimeStats.avgCostPerFct * 3500).toFixed(5)}`
+      )
+    );
+
+    // Show best mining hours if available
+    const bestHours = db.getBestHours(3);
+    if (bestHours.length > 0) {
+      console.log(chalk.cyan("  Best mining hours:"));
+      bestHours.forEach((h, i) => {
+        console.log(
+          chalk.gray(`    ${i + 1}. Hour ${h.hour}:00 (${h.txCount} txs)`)
+        );
+      });
+    }
+    console.log("");
+  }
 
   // Get wallet balance
   const balance = await publicClient.getBalance({
@@ -916,59 +1360,107 @@ async function startMiningSession() {
     balanceUsd
   );
 
+  // Display mining configuration if any advanced features are being used
+  const hasAdvancedConfig =
+    miningConfig.maxCostPerFct ||
+    miningConfig.minEfficiency ||
+    miningConfig.scheduleHours ||
+    miningConfig.targetFctAmount ||
+    miningConfig.strategy !== MiningStrategy.AUTO ||
+    options.interval;
+
+  if (hasAdvancedConfig) {
+    console.log(chalk.cyan(">> Mining Configuration:"));
+    console.log(chalk.white(`  Strategy: ${miningConfig.strategy}`));
+
+    if (miningConfig.maxCostPerFct)
+      console.log(
+        chalk.white(`  Max cost/FCT: $${miningConfig.maxCostPerFct}`)
+      );
+
+    if (miningConfig.minEfficiency)
+      console.log(
+        chalk.white(`  Min efficiency: ${miningConfig.minEfficiency}%`)
+      );
+
+    if (miningConfig.scheduleHours)
+      console.log(
+        chalk.white(`  Schedule: hours ${miningConfig.scheduleHours.join(",")}`)
+      );
+
+    if (miningConfig.targetFctAmount)
+      console.log(chalk.white(`  Target: ${miningConfig.targetFctAmount} FCT`));
+
+    if (options.interval && miningConfig.checkIntervalMs)
+      console.log(
+        chalk.white(`  Check interval: ${miningConfig.checkIntervalMs / 1000}s`)
+      );
+
+    console.log("");
+  }
+
   if (balance === 0n) {
     console.log(chalk.red("Error: Wallet has no ETH to spend"));
     return;
   }
 
-  // Show mining options header
-  ui.showMiningOptions();
+  // Handle mining size - use flag if provided, otherwise prompt
+  let selectedSize: number;
+  let estimatedCostPerTx: bigint;
 
-  // Ask for mining size first so user knows transaction costs
-  const sizeResult = await selectMiningSize(ethPriceUsd);
-  if (!sizeResult) {
-    console.log("Mining cancelled");
-    return;
-  }
+  if (options.maxSize) {
+    // Use flag value
+    selectedSize = options.maxSize * 1024; // Convert KB to bytes
 
-  const { selectedSize, estimatedCostPerTx } = sizeResult;
-
-  // Now ask for spend cap with knowledge of transaction costs
-  ui.showSpendingOptions(
-    formatEther(estimatedCostPerTx),
-    `$${(Number(formatEther(estimatedCostPerTx)) * ethPriceUsd).toFixed(2)}`
-  );
-
-  const spendChoice = await prompt("\nChoose option (1 or 2): ");
-
-  let spendCap: bigint;
-
-  if (spendChoice === "1") {
-    // Leave a small buffer for gas on the final transaction
-    const buffer = BigInt(Math.floor(Number(balance) * 0.01)); // 1% buffer
-    spendCap = balance - buffer;
-    ui.showSpendingChoice(
-      "all",
-      `(${formatEther(spendCap)} ETH, leaving ${formatEther(
-        buffer
-      )} ETH buffer)`
+    // Calculate cost for the specified size
+    const overheadBytes = 160;
+    const mineBoostSize = selectedSize - overheadBytes;
+    const baseExecutionGas = 21000n;
+    const currentBlock = await publicClient.getBlock();
+    const baseFee = currentBlock.baseFeePerGas || 0n;
+    const gasPriceMultiplier = Number(process.env.GAS_PRICE_MULTIPLIER) || 1.5;
+    const adjustedBaseFee = BigInt(
+      Math.floor(Number(baseFee) * gasPriceMultiplier)
     );
-  } else if (spendChoice === "2") {
-    const capInput = await prompt("Enter ETH spending cap (e.g., 0.01): ");
-    const capFloat = parseFloat(capInput);
 
-    if (isNaN(capFloat) || capFloat <= 0) {
-      console.log("Invalid spending cap");
+    const estimatedInputCostGas =
+      calculateInputGasCost(new Uint8Array(mineBoostSize).fill(70)) +
+      baseExecutionGas;
+    estimatedCostPerTx = estimatedInputCostGas * adjustedBaseFee;
+
+    console.log(
+      chalk.cyan(
+        `Using data size: ${options.maxSize}KB (${selectedSize} bytes)`
+      )
+    );
+  } else {
+    // Show mining options header and prompt
+    ui.showMiningOptions();
+
+    const sizeResult = await selectMiningSize(ethPriceUsd);
+    if (!sizeResult) {
+      console.log("Mining cancelled");
       return;
     }
 
-    spendCap = BigInt(Math.floor(capFloat * 1e18)); // Convert to wei
+    selectedSize = sizeResult.selectedSize;
+    estimatedCostPerTx = sizeResult.estimatedCostPerTx;
+  }
+
+  // Handle spending cap - use flag if provided, otherwise prompt
+  let spendCap: bigint;
+
+  if (options.budget) {
+    // Use flag value
+    spendCap = BigInt(Math.floor(options.budget * 1e18)); // Convert to wei
 
     if (spendCap > balance) {
       console.log(
-        `Spending cap (${formatEther(
-          spendCap
-        )} ETH) exceeds wallet balance (${formatEther(balance)} ETH)`
+        chalk.red(
+          `Budget (${formatEther(
+            spendCap
+          )} ETH) exceeds wallet balance (${formatEther(balance)} ETH)`
+        )
       );
       return;
     }
@@ -976,17 +1468,82 @@ async function startMiningSession() {
     const estimatedTxCount = Math.floor(
       Number(spendCap) / Number(estimatedCostPerTx)
     );
-    ui.showSpendingChoice(
-      "cap",
-      `${formatEther(spendCap)} ETH (~${estimatedTxCount} transactions)`
+    console.log(
+      chalk.cyan(
+        `Using budget: ${formatEther(
+          spendCap
+        )} ETH (~${estimatedTxCount} transactions)`
+      )
     );
   } else {
-    console.log("Invalid choice");
-    return;
+    // Show spending options and prompt
+    ui.showSpendingOptions(
+      formatEther(estimatedCostPerTx),
+      `$${(Number(formatEther(estimatedCostPerTx)) * ethPriceUsd).toFixed(2)}`
+    );
+
+    const spendChoice = await prompt("\nChoose option (1 or 2): ");
+
+    if (spendChoice === "1") {
+      // Leave a small buffer for gas on the final transaction
+      const buffer = BigInt(Math.floor(Number(balance) * 0.01)); // 1% buffer
+      spendCap = balance - buffer;
+      ui.showSpendingChoice(
+        "all",
+        `(${formatEther(spendCap)} ETH, leaving ${formatEther(
+          buffer
+        )} ETH buffer)`
+      );
+    } else if (spendChoice === "2") {
+      const capInput = await prompt("Enter ETH spending cap (e.g., 0.01): ");
+      const capFloat = parseFloat(capInput);
+
+      if (isNaN(capFloat) || capFloat <= 0) {
+        console.log("Invalid spending cap");
+        return;
+      }
+
+      spendCap = BigInt(Math.floor(capFloat * 1e18)); // Convert to wei
+
+      if (spendCap > balance) {
+        console.log(
+          `Spending cap (${formatEther(
+            spendCap
+          )} ETH) exceeds wallet balance (${formatEther(balance)} ETH)`
+        );
+        return;
+      }
+
+      const estimatedTxCount = Math.floor(
+        Number(spendCap) / Number(estimatedCostPerTx)
+      );
+      ui.showSpendingChoice(
+        "cap",
+        `${formatEther(spendCap)} ETH (~${estimatedTxCount} transactions)`
+      );
+    } else {
+      console.log("Invalid choice");
+      return;
+    }
   }
 
-  // Start mining loop
-  await miningLoop(spendCap, ethPriceUsd, selectedSize);
+  // Start mining loop with database integration and mining config
+  await miningLoop(
+    spendCap,
+    ethPriceUsd,
+    selectedSize,
+    db,
+    analytics,
+    miningConfig
+  );
+
+  // Close database connection
+  db.close();
+}
+
+async function main() {
+  // Parse command line arguments
+  program.parse();
 }
 
 main().catch(console.error);

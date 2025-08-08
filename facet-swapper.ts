@@ -101,6 +101,20 @@ export async function getSwapQuote(ethAmount: bigint): Promise<{
   }
 
   try {
+    // Get token addresses to determine order
+    const [token0Addr, token1Addr] = await Promise.all([
+      facetClient.readContract({
+        address: networkConfig.fctWethPair!,
+        abi: UNISWAP_V2_PAIR_ABI,
+        functionName: "token0",
+      }),
+      facetClient.readContract({
+        address: networkConfig.fctWethPair!,
+        abi: UNISWAP_V2_PAIR_ABI,
+        functionName: "token1",
+      }),
+    ]);
+    
     // Get current reserves
     const [reserve0, reserve1] = await facetClient.readContract({
       address: networkConfig.fctWethPair!,
@@ -108,9 +122,18 @@ export async function getSwapQuote(ethAmount: bigint): Promise<{
       functionName: "getReserves",
     });
 
-    // Token0 is WETH, Token1 is FCT
-    const wethReserve = reserve0;
-    const fctReserve = reserve1;
+    // Determine token order dynamically
+    let wethReserve: bigint, fctReserve: bigint;
+    if ((token0Addr as string).toLowerCase() === WETH_ADDRESS.toLowerCase()) {
+      wethReserve = reserve0;
+      fctReserve = reserve1;
+    } else if ((token1Addr as string).toLowerCase() === WETH_ADDRESS.toLowerCase()) {
+      wethReserve = reserve1;
+      fctReserve = reserve0;
+    } else {
+      console.log("WETH not found in pair");
+      return null;
+    }
 
     // Calculate swap output and price impact
     const { amountOut, priceImpact } = calculatePriceImpact(

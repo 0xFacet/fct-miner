@@ -1,4 +1,16 @@
 import chalk from "chalk";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+// Get version from package.json
+function getVersion(): string {
+  const packageJson = JSON.parse(
+    readFileSync(join(__dirname, "package.json"), "utf8")
+  );
+  return packageJson.version;
+}
+
+const VERSION = getVersion();
 
 // Enhanced logging functions to replace console.log calls
 export const ui = {
@@ -7,7 +19,7 @@ export const ui = {
     console.clear();
 
     const borderWidth = 79;
-    const text = "FCT MINER v1.0";
+    const text = `FCT MINER v${VERSION}`;
     const padding = Math.floor((borderWidth - text.length) / 2);
     const remainder = borderWidth - text.length - padding;
     const centeredText = " ".repeat(padding) + text + " ".repeat(remainder);
