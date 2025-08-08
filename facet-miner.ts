@@ -289,7 +289,7 @@ async function getEthPriceInUsd(): Promise<number> {
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const data = await response.json();
+    const data = await response.json() as { priceInUSD: string };
     const price = parseFloat(data.priceInUSD);
 
     if (isNaN(price) || price <= 0) {
@@ -555,10 +555,7 @@ async function miningLoop(
         const currentBaseFee = currentBlock.baseFeePerGas || 0n;
         let currentMintRate = 0n;
         try {
-          currentMintRate = await getFctMintRate(
-            publicClient,
-            networkConfig.facetSwapV1PoolAddress
-          );
+          currentMintRate = await getFctMintRate(networkConfig.l1Chain.id);
         } catch (error) {
           // Use default mint rate if getFctMintRate fails (e.g., on testnets)
           currentMintRate = 0n;
@@ -740,6 +737,8 @@ async function mineFacetTransactionWithDashboard(
             account,
             gasPrice: boostedGasPrice,
             nonce: l1Nonce,
+            kzg: undefined,
+            chain: undefined,
           });
         }
       );
@@ -1015,6 +1014,8 @@ async function mineFacetTransaction(
             account,
             gasPrice: boostedGasPrice,
             nonce: l1Nonce,
+            kzg: undefined,
+            chain: undefined,
           });
         }
       );
@@ -1390,7 +1391,7 @@ async function startInteractiveMining(options: any) {
     if (miningConfig.targetFctAmount)
       console.log(chalk.white(`  Target: ${miningConfig.targetFctAmount} FCT`));
 
-    if (options.interval)
+    if (options.interval && miningConfig.checkIntervalMs)
       console.log(
         chalk.white(`  Check interval: ${miningConfig.checkIntervalMs / 1000}s`)
       );

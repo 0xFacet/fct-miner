@@ -15,7 +15,8 @@
     "network:show": "tsx switch-network.ts show",
     "network:sepolia": "tsx switch-network.ts sepolia",
     "network:mainnet": "tsx switch-network.ts mainnet",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
