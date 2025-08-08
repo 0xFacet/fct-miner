@@ -1,15 +1,14 @@
 {
   "name": "miner",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "",
   "main": "index.js",
   "scripts": {
     "mine": "tsx facet-miner.ts",
     "mine:sepolia": "tsx switch-network.ts sepolia && tsx facet-miner.ts",
     "mine:mainnet": "tsx switch-network.ts mainnet && tsx facet-miner.ts",
-    "auto": "tsx auto-mine-cli.ts",
-    "auto:analyze": "tsx auto-mine-cli.ts analyze",
-    "auto:profiles": "tsx auto-mine-cli.ts profiles",
+    "mine:analyze": "tsx facet-miner.ts --analyze",
+    "mine:profiles": "tsx facet-miner.ts --profiles",
     "swap": "tsx facet-swapper.ts",
     "l2hash": "tsx l1-to-l2-hash.ts",
     "network": "tsx switch-network.ts",

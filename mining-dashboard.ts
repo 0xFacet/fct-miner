@@ -2,6 +2,19 @@ import chalk from "chalk";
 import { createSpinner } from "nanospinner";
 import { formatEther } from "viem";
 import { getNetworkConfig } from "./config.js";
+import { readFileSync } from "fs";
+import { join } from "path";
+import { MiningConfig } from "./mining-rules";
+
+// Get version from package.json
+function getVersion(): string {
+  const packageJson = JSON.parse(
+    readFileSync(join(__dirname, "package.json"), "utf8")
+  );
+  return packageJson.version;
+}
+
+const VERSION = getVersion();
 
 interface MiningStats {
   totalTransactions: number;
@@ -30,8 +43,10 @@ export class MiningDashboard {
   private currentTx: TransactionProgress | null = null;
   private startTime: number = Date.now();
   private intervalId: NodeJS.Timeout | null = null;
+  private miningConfig?: MiningConfig;
 
-  constructor(initialStats: Partial<MiningStats>) {
+  constructor(initialStats: Partial<MiningStats>, miningConfig?: MiningConfig) {
+    this.miningConfig = miningConfig;
     this.stats = {
       totalTransactions: 0,
       totalETHSpent: 0n,
@@ -140,7 +155,7 @@ export class MiningDashboard {
 
   private renderHeader() {
     const borderWidth = 79;
-    const text = "FCT MINER v1.0";
+    const text = `FCT MINER v${VERSION}`;
     const padding = Math.floor((borderWidth - text.length) / 2);
     const remainder = borderWidth - text.length - padding;
     const centeredText = " ".repeat(padding) + text + " ".repeat(remainder);
@@ -211,6 +226,51 @@ export class MiningDashboard {
       `  Rate: ${chalk.cyan.bold(this.stats.miningRate.toFixed(1) + " FCT/hr")}`
     );
     console.log(`  ETA: ${chalk.blue.bold(this.stats.estimatedTimeLeft)}`);
+
+    // Display mining configuration if available
+    if (this.miningConfig) {
+      const hasAdvancedRules =
+        this.miningConfig.maxCostPerFct ||
+        this.miningConfig.minEfficiency ||
+        this.miningConfig.scheduleHours ||
+        this.miningConfig.targetFctAmount;
+
+      if (hasAdvancedRules) {
+        console.log(`\n${chalk.cyan("Mining Rules:")}`);
+
+        if (this.miningConfig.maxCostPerFct) {
+          console.log(
+            `  Max Cost: ${chalk.green.bold(
+              "$" + this.miningConfig.maxCostPerFct + "/FCT"
+            )}`
+          );
+        }
+
+        if (this.miningConfig.minEfficiency) {
+          console.log(
+            `  Min Efficiency: ${chalk.green.bold(
+              this.miningConfig.minEfficiency + "%"
+            )}`
+          );
+        }
+
+        if (this.miningConfig.scheduleHours) {
+          console.log(
+            `  Schedule: ${chalk.blue.bold(
+              "Hours " + this.miningConfig.scheduleHours.join(",")
+            )}`
+          );
+        }
+
+        if (this.miningConfig.targetFctAmount) {
+          console.log(
+            `  Target: ${chalk.magenta.bold(
+              this.miningConfig.targetFctAmount + " FCT"
+            )}`
+          );
+        }
+      }
+    }
   }
 
   private renderCurrentTransaction() {

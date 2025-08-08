@@ -45,8 +45,8 @@ function main() {
 
   if (args.length === 0) {
     console.log("Usage:");
-    console.log("  npm run network <network>   - Switch to network");
-    console.log("  npm run network:show        - Show current network");
+      console.log("  pnpm network <network>      - Switch to network");
+  console.log("  pnpm network:show           - Show current network");
     console.log("");
     console.log("Supported networks:", SUPPORTED_NETWORKS.join(", "));
     showCurrentNetwork();
@@ -82,7 +82,7 @@ function main() {
     console.log("  - Real ETH required for gas fees");
     console.log("  - FCT trading and price data available");
     console.log("  - Higher gas costs");
-    console.log("  - Use: npm run mine (for production)");
+    console.log("  - Use: pnpm mine (for production)");
   }
 }
 

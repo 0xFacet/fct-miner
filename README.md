@@ -31,38 +31,98 @@ An interactive FCT token miner with real-time dashboard interface for both mainn
 
    ```bash
    # Mine on current network
-   npm run mine
+   pnpm mine
 
    # Mine on specific networks
-   npm run mine:sepolia
-   npm run mine:mainnet
+   pnpm mine:sepolia
+   pnpm mine:mainnet
    ```
 
 ## Available Commands
 
 ### Mining Commands
 
+The unified `pnpm mine` command supports both **interactive** and **autonomous** mining modes:
+
+#### Interactive Mode (Default)
+
 ```bash
-npm run mine              # Mine on current network
-npm run mine:sepolia      # Switch to Sepolia + mine
-npm run mine:mainnet      # Switch to mainnet + mine
+pnpm mine              # Interactive mining with prompts
+pnpm mine:sepolia      # Switch to Sepolia + interactive mine
+pnpm mine:mainnet      # Switch to mainnet + interactive mine
+
+# Skip prompts with flags
+pnpm mine --budget 0.01              # Skip spending cap prompt
+pnpm mine --max-size 50              # Skip size selection prompt
+pnpm mine --budget 0.01 --max-size 25  # Skip both prompts
+```
+
+#### Autonomous Mode (Advanced)
+
+```bash
+# Basic autonomous mining
+pnpm mine --max-cost-usd 0.0005 --budget 0.01
+
+# Night mining (2-6 AM)
+pnpm mine --hours 2-6 --budget 0.02
+
+# Target-based mining
+pnpm mine --target 5000 --max-cost-usd 0.0004
+
+# Arbitrage strategy (only mine when cheaper than DEX)
+pnpm mine --strategy arbitrage --interval 10
+```
+
+#### Analytics & Profiles
+
+```bash
+pnpm mine --analyze    # Show mining analytics
+pnpm mine --profiles   # Show example configurations
+pnpm mine --help       # Show all available options
 ```
 
 ### Network Management
 
 ```bash
-npm run network           # Interactive network switcher
-npm run network:show      # Show current network
-npm run network:sepolia   # Switch to Sepolia testnet
-npm run network:mainnet   # Switch to mainnet
+pnpm network           # Interactive network switcher
+pnpm network:show      # Show current network
+pnpm network:sepolia   # Switch to Sepolia testnet
+pnpm network:mainnet   # Switch to mainnet
 ```
 
 ### Other Tools
 
 ```bash
-npm run swap              # FCT swapping (mainnet only)
-npm run l2hash            # L1 to L2 hash conversion utility
+pnpm swap              # FCT swapping (mainnet only)
+pnpm l2hash            # L1 to L2 hash conversion utility
 ```
+
+## Mining Options & Flags
+
+### Available Flags
+
+| Flag                             | Description                         | Example                 |
+| -------------------------------- | ----------------------------------- | ----------------------- |
+| `-s, --strategy <type>`          | Mining strategy (auto/arbitrage)    | `--strategy arbitrage`  |
+| `-c, --max-cost-usd <usd>`       | Maximum cost per FCT in USD         | `--max-cost-usd 0.0005` |
+| `-e, --min-efficiency <percent>` | Minimum mining efficiency %         | `--min-efficiency 85`   |
+| `-H, --hours <range>`            | Hours to mine (enables autonomous)  | `--hours 2-6,14-18`     |
+| `-b, --budget <eth>`             | Daily budget in ETH                 | `--budget 0.01`         |
+| `-t, --target <fct>`             | Target FCT amount to mine           | `--target 5000`         |
+| `-i, --interval <seconds>`       | Check interval (enables autonomous) | `--interval 30`         |
+| `-m, --max-size <kb>`            | Maximum data size in KB             | `--max-size 50`         |
+| `--analyze`                      | Show analytics after completion     | `--analyze`             |
+| `--profiles`                     | Show mining profile examples        | `--profiles`            |
+
+### Mining Strategies
+
+- **auto** (default): Smart mode that maximizes efficiency within your budget
+- **arbitrage**: Only mines when cheaper than buying FCT on DEX
+
+### Mode Detection
+
+- **Interactive Mode**: Default behavior with prompts (unless autonomous flags used)
+- **Autonomous Mode**: Automatically enabled when using `--hours` or `--interval`
 
 ## Network Configuration
 
