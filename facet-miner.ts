@@ -138,14 +138,20 @@ async function getFctMarketPrice(): Promise<{
       functionName: "getReserves",
     });
 
-    // Token0 is WETH (0x1673540243E793B0e77C038D4a88448efF524DcE)
-    // Token1 is wrapped FCT (0x4200000000000000000000000000000000000006)
-    // Based on the debug output, we know:
-    // Reserve0 = WETH reserve (small amount)
-    // Reserve1 = FCT reserve (large amount)
-
-    const wethReserve = reserve0; // WETH is token0
-    const fctReserve = reserve1; // FCT is token1
+    // Determine token order dynamically
+    const WETH = "0x1673540243E793B0e77C038D4a88448efF524DcE";
+    let wethReserve: bigint, fctReserve: bigint;
+    
+    if ((token0 as string).toLowerCase() === WETH.toLowerCase()) {
+      wethReserve = reserve0;
+      fctReserve = reserve1;
+    } else if ((token1 as string).toLowerCase() === WETH.toLowerCase()) {
+      wethReserve = reserve1;
+      fctReserve = reserve0;
+    } else {
+      console.log("WETH not found in pair");
+      return null;
+    }
 
     if (fctReserve === 0n || wethReserve === 0n) {
       return null;
@@ -544,6 +550,7 @@ async function mineFacetTransaction(
   const baseExecutionGas = 21000n;
   const estimatedInputCostGas =
     calculateInputGasCost(mineBoostData) + baseExecutionGas;
+  // Use baseFee (not gasPrice) for FCT calculation
   const inputCostWei = (estimatedInputCostGas - baseExecutionGas) * baseFee;
   const fctMintAmount = inputCostWei * fctMintRate;
 
@@ -725,6 +732,19 @@ async function mineFacetTransaction(
     let actualGasUsed = estimatedInputCostGas; // Fallback to estimate
     let actualGasPrice = boostedGasPrice; // Use the gas price we set
     let isConfirmed = false;
+    
+    // Get L1 receipt for actual gas used
+    try {
+      const l1Receipt = await publicClient.waitForTransactionReceipt({
+        hash: l1TransactionHash as `0x${string}`,
+        timeout: 60_000,
+      });
+      actualEthBurned = (l1Receipt.effectiveGasPrice ?? boostedGasPrice) * (l1Receipt.gasUsed ?? 0n);
+      actualGasUsed = l1Receipt.gasUsed ?? estimatedInputCostGas;
+      actualGasPrice = l1Receipt.effectiveGasPrice ?? boostedGasPrice;
+    } catch (l1Error) {
+      console.log("Warning: Could not get L1 receipt, using estimates");
+    }
 
     try {
       const facetReceipt = await facetClient.waitForTransactionReceipt({
